@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.autograd import Function
@@ -83,20 +84,57 @@ class GradientReverseLayer(nn.Module):
         return GradientReverseFunction.apply(*input)
 
 
+class RandomizedMultiLinearMap(torch.nn.Module):
+
+    def __init__(self, feat_dim, num_classes, map_dim = 1024):
+        super(RandomizedMultiLinearMap, self).__init__()
+        self.scaler = np.sqrt(float(map_dim))
+        Rf = torch.randn(feat_dim, map_dim)
+        Rg = torch.randn(num_classes, map_dim)
+        self.register_buffer('Rf', Rf, persistent=True)
+        self.register_buffer('Rg', Rg, persistent=True)
+        self.output_dim = map_dim
+
+    def forward(self, f, g):
+        f = f @ self.Rf
+        g = g @ self.Rg
+        output = (f * g) / self.scaler
+        return output
+
+
 class DomainAdversarialNetwork(nn.Module):
-    def __init__(self, featurizer, classifier, n_domains):
+    def __init__(self, featurizer, classifier, n_domains, dann_type, num_classes=None, cdan_map_dim=1024):
         super().__init__()
+        self.dann_type = dann_type
+        assert self.dann_type in ['dann', 'cdan', 'cdane']
+        if self.dann_type == 'cdane':
+            assert n_domains == 2
+        
         self.featurizer = featurizer
         self.classifier = classifier
-        self.domain_classifier = DomainDiscriminator(featurizer.d_out, n_domains)
+        if self.dann_type == 'dann':
+            self.domain_classifier = DomainDiscriminator(featurizer.d_out, n_domains)
+        else:
+            self.domain_classifier = DomainDiscriminator(cdan_map_dim, n_domains)
+
         self.gradient_reverse_layer = GradientReverseLayer()
+
+        if self.dann_type in ['cdan', 'cdane']:
+            self.multilinear_map = RandomizedMultiLinearMap(featurizer.d_out, num_classes, map_dim=cdan_map_dim)
 
     def forward(self, input):
         features = self.featurizer(input)
         y_pred = self.classifier(features)
-        features = self.gradient_reverse_layer(features)
-        domains_pred = self.domain_classifier(features)
-        return y_pred, domains_pred
+        ret_features = features.clone()
+        if self.dann_type == 'dann':
+            features = self.gradient_reverse_layer(features)
+            domains_pred = self.domain_classifier(features)
+        else:
+            y_prob = torch.nn.functional.softmax(y_pred, -1).detach()
+            dd_inp = self.multilinear_map(features, y_prob)
+            dd_inp = self.gradient_reverse_layer(dd_inp)
+            domains_pred = self.domain_classifier(dd_inp)
+        return y_pred, domains_pred, ret_features
 
     def get_parameters_with_lr(self, featurizer_lr, classifier_lr, discriminator_lr) -> List[Dict]:
         """

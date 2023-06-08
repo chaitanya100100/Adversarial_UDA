@@ -40,7 +40,7 @@ def main():
     # Required arguments
     parser.add_argument('-d', '--dataset', choices=wilds.supported_datasets, required=True)
     parser.add_argument('--algorithm', required=True, choices=supported.algorithms)
-    parser.add_argument('--root_dir', required=True,
+    parser.add_argument('--root_dir', required=False, default='/vision/u/chpatel/data/WILDS/data/',
                         help='The directory where [dataset]/data can be found (or should be downloaded to, if it does not exist).')
 
     # Dataset
@@ -105,6 +105,23 @@ def main():
     parser.add_argument('--dann_classifier_lr', type=float)
     parser.add_argument('--dann_featurizer_lr', type=float)
     parser.add_argument('--dann_discriminator_lr', type=float)
+
+    # Added by Chaitanya
+    # ----------------------
+    parser.add_argument('--dann_type', default='dann', type=str)
+
+    parser.add_argument('--use_bsp_loss', default=False, type=parse_bool, const=True, nargs='?')
+
+    parser.add_argument('--avoid_dann', default=False, type=parse_bool, const=True, nargs='?')
+    parser.add_argument('--use_nwd_loss', default=False, type=parse_bool, const=True, nargs='?')
+    parser.add_argument('--nwd_loss_weight', default=0.1, type=float)
+
+    parser.add_argument('--use_bnm_loss', default=False, type=parse_bool, const=True, nargs='?')
+    parser.add_argument('--bnm_loss_weight', default=1., type=float)
+
+    parser.add_argument('--eval_save_data', type=parse_bool, const=True, nargs='?', default=False)
+    # ----------------------
+
     parser.add_argument('--afn_penalty_weight', type=float)
     parser.add_argument('--safn_delta_r', type=float)
     parser.add_argument('--hafn_r', type=float)
@@ -148,7 +165,7 @@ def main():
     # Misc
     parser.add_argument('--device', type=int, nargs='+', default=[0])
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--log_dir', default='./logs')
+    parser.add_argument('--log_dir', required=True, type=str)
     parser.add_argument('--log_every', default=50, type=int)
     parser.add_argument('--save_step', type=int)
     parser.add_argument('--save_best', type=parse_bool, const=True, nargs='?', default=True)
@@ -204,7 +221,8 @@ def main():
     logger = Logger(os.path.join(config.log_dir, 'log.txt'), mode)
 
     # Record config
-    log_config(config, logger)
+    if not config.eval_only:
+        log_config(config, logger)
 
     # Set random seed
     set_seed(config.seed)
@@ -460,13 +478,18 @@ def main():
             epoch = config.eval_epoch
         if epoch == best_epoch:
             is_best = True
+        eval_save_data = config.eval_save_data
+        if eval_save_data:
+            datasets['unlabeled'] = unlabeled_dataset
         evaluate(
             algorithm=algorithm,
             datasets=datasets,
             epoch=epoch,
             general_logger=logger,
             config=config,
-            is_best=is_best)
+            is_best=is_best,
+            eval_save_data=eval_save_data)
+        datasets.pop('unlabeled')
 
     if config.use_wandb:
         wandb.finish()

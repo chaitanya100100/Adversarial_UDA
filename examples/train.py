@@ -2,6 +2,8 @@ import copy
 import torch
 from tqdm import tqdm
 import math
+import numpy as np
+import os
 
 from configs.supported import process_outputs_functions, process_pseudolabels_functions
 from utils import save_model, save_pred, get_pred_prefix, get_model_prefix, collate_list, detach_and_clone, InfiniteDataIterator
@@ -144,32 +146,81 @@ def train(algorithm, datasets, general_logger, config, epoch_offset, best_val_me
         general_logger.write('\n')
 
 
-def evaluate(algorithm, datasets, epoch, general_logger, config, is_best):
+def evaluate(algorithm, datasets, epoch, general_logger, config, is_best, eval_save_data):
     algorithm.eval()
     torch.set_grad_enabled(False)
+
+    if eval_save_data:
+        print("SAVING EVAL DATA...")
+
     for split, dataset in datasets.items():
         if (not config.evaluate_all_splits) and (split not in config.eval_splits):
             continue
+        if eval_save_data and (split not in ['train', 'val', 'test', 'unlabeled']):
+            continue
+        # if eval_save_data and (split not in ['unlabeled']):
+        #     continue
+        if eval_save_data:
+            print("Split", split)
+
         epoch_y_true = []
         epoch_y_pred = []
         epoch_metadata = []
+        epoch_feats = []
+        epoch_cls_logits = []
+        epoch_domcls_logits = []
         iterator = tqdm(dataset['loader']) if config.progress_bar else dataset['loader']
         for batch in iterator:
+            if split == 'unlabeled':
+                # import ipdb; ipdb.set_trace()
+                batch = (
+                    batch[0],
+                    batch[1][:, -2].clone(),
+                    batch[1],
+                )
             batch_results = algorithm.evaluate(batch)
+            if eval_save_data:
+                epoch_feats.append(detach_and_clone(batch_results['features']))
+                epoch_cls_logits.append(detach_and_clone(batch_results['y_pred']))
+                epoch_domcls_logits.append(detach_and_clone(batch_results['domains_pred']))
             epoch_y_true.append(detach_and_clone(batch_results['y_true']))
             y_pred = detach_and_clone(batch_results['y_pred'])
             if config.process_outputs_function is not None:
                 y_pred = process_outputs_functions[config.process_outputs_function](y_pred)
             epoch_y_pred.append(y_pred)
             epoch_metadata.append(detach_and_clone(batch_results['metadata']))
+            # if len(epoch_y_pred) > 0:
+            #     break
 
         epoch_y_pred = collate_list(epoch_y_pred)
         epoch_y_true = collate_list(epoch_y_true)
         epoch_metadata = collate_list(epoch_metadata)
-        results, results_str = dataset['dataset'].eval(
-            epoch_y_pred,
-            epoch_y_true,
-            epoch_metadata)
+        if eval_save_data:
+            epoch_feats = collate_list(epoch_feats)
+            epoch_cls_logits = collate_list(epoch_cls_logits)
+            epoch_domcls_logits = collate_list(epoch_domcls_logits)
+
+        if split != 'unlabeled':
+            results, results_str = dataset['dataset'].eval(
+                epoch_y_pred,
+                epoch_y_true,
+                epoch_metadata)
+        else:
+            results = None
+        
+        if eval_save_data:
+            save_dict = {
+                'epoch_y_pred': epoch_y_pred.cpu().numpy(),
+                'epoch_y_true': epoch_y_true.cpu().numpy(),
+                'epoch_metadata': epoch_metadata.cpu().numpy(),
+                'epoch_feats': epoch_feats.cpu().numpy(),
+                'epoch_cls_logits': epoch_cls_logits.cpu().numpy(),
+                'epoch_domcls_logits': epoch_domcls_logits.cpu().numpy(),
+                'results': results,
+                'classifier': algorithm.model.classifier.weight.clone().detach().cpu().numpy(),
+            }
+            np.savez(os.path.join(config.log_dir, f'data_{split}.npz'), **save_dict)
+            continue
 
         results['epoch'] = epoch
         dataset['eval_logger'].log(results)

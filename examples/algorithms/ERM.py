@@ -2,6 +2,7 @@ import torch
 from algorithms.single_model_algorithm import SingleModelAlgorithm
 from models.initializer import initialize_model
 from utils import move_to
+from models.cp_impl import get_bnm_loss, NuclearWassersteinDiscrepancy
 
 class ERM(SingleModelAlgorithm):
     def __init__(self, config, d_out, grouper, loss,
@@ -17,6 +18,11 @@ class ERM(SingleModelAlgorithm):
             n_train_steps=n_train_steps,
         )
         self.use_unlabeled_y = config.use_unlabeled_y # Expect x,y,m from unlabeled loaders and train on the unlabeled y
+        self.use_bnm = config.use_bnm_loss
+        self.bnm_loss_weight = config.bnm_loss_weight
+        if self.use_bnm:
+            self.logged_fields.append("bnm_loss")
+            print("Using BNM loss...")
 
     def process_batch(self, batch, unlabeled_batch=None):
         """
@@ -49,6 +55,7 @@ class ERM(SingleModelAlgorithm):
             'y_pred': outputs,
             'metadata': metadata,
         }
+        unlabeled_logits = None
         if unlabeled_batch is not None:
             if self.use_unlabeled_y: # expect loaders to return x,y,m
                 x, y, metadata = unlabeled_batch
@@ -60,7 +67,17 @@ class ERM(SingleModelAlgorithm):
             if self.use_unlabeled_y:
                 results['unlabeled_y_pred'] = self.get_model_output(x, y)
                 results['unlabeled_y_true'] = y
+                unlabeled_logits = results['unlabeled_y_pred']
+            elif self.use_bnm:
+                unlabeled_logits = self.get_model_output(x, None)
+
             results['unlabeled_g'] = self.grouper.metadata_to_group(metadata).to(self.device)
+        
+        bnm_loss = 0
+        if (unlabeled_logits is not None) and self.use_bnm:
+            bnm_loss = get_bnm_loss(unlabeled_logits)
+        results['bnm_loss'] = bnm_loss
+
         return results
 
     def objective(self, results):
@@ -75,4 +92,8 @@ class ERM(SingleModelAlgorithm):
             unl_size = len(results['unlabeled_y_pred'])
             return (lab_size * labeled_loss + unl_size * unlabeled_loss) / (lab_size + unl_size)
         else:
+            if self.use_bnm:
+                bnm_loss = results.pop('bnm_loss')
+                labeled_loss += bnm_loss * self.bnm_loss_weight
+                self.save_metric_for_logging(results, "bnm_loss", bnm_loss)
             return labeled_loss

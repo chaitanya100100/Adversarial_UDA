@@ -66,7 +66,7 @@ parser = argparse.ArgumentParser(description="Implementation of SwAV")
 ##### dataset params ####
 #########################
 parser.add_argument('-d', '--dataset', required=True, choices=wilds.unlabeled_datasets)
-parser.add_argument('--root_dir', required=True,
+parser.add_argument('--root_dir', required=False, default='/vision/u/chpatel/data/WILDS/data/',
                     help='The directory where [dataset]/data can be found (or should be downloaded to, if it does not exist).')
 parser.add_argument('--dataset_kwargs', nargs='*', action=ParseKwargs, default={})
 parser.add_argument('--loader_kwargs', nargs='*', action=ParseKwargs, default={})
@@ -144,8 +144,8 @@ parser.add_argument("--use_fp16", type=bool_flag, default=True,
 parser.add_argument("--sync_bn", type=str, default="pytorch", help="synchronize bn")
 parser.add_argument("--syncbn_process_group_size", type=int, default=8, help=""" see
                     https://github.com/NVIDIA/apex/blob/master/apex/parallel/__init__.py#L58-L67""")
-parser.add_argument("--log_dir", type=str, default=".",
-                    help="experiment dump path for checkpoints and log")
+parser.add_argument('--log_dir', required=True, type=str)
+
 parser.add_argument("--seed", type=int, default=0, help="seed")
 parser.add_argument("--is_not_slurm_job", type=bool_flag, default=True, help="Set to true if not running in Slurm.")
 parser.add_argument("--cpu_only", type=bool_flag, default=False,
